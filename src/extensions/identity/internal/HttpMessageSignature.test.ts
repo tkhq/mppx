@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vp/test'
-import { keyPair } from '~test/Identity.js'
+import { keyPair, rsaKeyPair } from '~test/Identity.js'
 
 import * as Store from '../../../Store.js'
 import { Algorithms, Headers } from '../Constants.js'
@@ -68,6 +68,63 @@ test('rejects non-ASCII signed HTTP header values', async () => {
       },
     ),
   ).rejects.toThrow('Signed HTTP header "x-example" is not ASCII.')
+})
+
+test('signs with an external RSA-PSS SHA-512 key', async () => {
+  const keys = await rsaKeyPair()
+  const signed = await HttpMessageSignature.sign(new Request('https://merchant.example/resource'), {
+    components: ['@authority'],
+    key: {
+      algorithm: Algorithms.rsaPssSha512,
+      async sign(bytes) {
+        return new Uint8Array(
+          await crypto.subtle.sign(
+            { name: 'RSA-PSS', saltLength: 64 },
+            keys.privateKey,
+            Uint8Array.from(bytes).buffer,
+          ),
+        )
+      },
+    },
+    keyId: 'remote-rsa',
+    label: 'test',
+    tag: 'test',
+  })
+
+  expect(
+    await HttpMessageSignature.verify(signed, {
+      keyResolver: ({ algorithm }) => {
+        expect(algorithm).toBe(Algorithms.rsaPssSha512)
+        return keys.publicKey
+      },
+      maxAge: 60,
+      nonceNamespace: 'remote-rsa',
+      nonceStore: Store.memory(),
+      requiredComponents: ['@authority'],
+      tag: 'test',
+    }),
+  ).toMatchObject({ status: 'verified' })
+})
+
+test('rejects unsupported external algorithms before calling the signer', async () => {
+  let called = false
+  await expect(
+    HttpMessageSignature.sign(new Request('https://merchant.example/resource'), {
+      components: ['@authority'],
+      key: {
+        // JavaScript callers can supply unsupported algorithms despite the type.
+        algorithm: 'hmac-sha256' as typeof Algorithms.ed25519,
+        async sign() {
+          called = true
+          return new Uint8Array()
+        },
+      },
+      keyId: 'unsupported',
+      label: 'test',
+      tag: 'test',
+    }),
+  ).rejects.toThrow('HTTP message signatures require an Ed25519 or RSA-PSS SHA-512 signing key.')
+  expect(called).toBe(false)
 })
 
 function vectorRequest(parameters: { input: string; signature: string }): Request {

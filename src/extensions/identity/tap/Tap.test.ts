@@ -82,6 +82,34 @@ test('shares replay protection across verifier instances and TAP intents', async
   })
 })
 
+test('signs a TAP payment intent with an external Ed25519 key', async () => {
+  const keys = await keyPair()
+  const signed = await Tap.Client.prover({
+    scope: '*',
+    intent: Tap.Constants.intents.payment,
+    key: {
+      algorithm: Signatures.Algorithms.ed25519,
+      async sign(bytes) {
+        expect(new TextDecoder().decode(bytes)).toContain('"@path": /resource')
+        return new Uint8Array(
+          await crypto.subtle.sign('Ed25519', keys.privateKey, Uint8Array.from(bytes).buffer),
+        )
+      },
+    },
+    keyId: 'remote-tap-agent',
+  }).prove(new Request('https://merchant.example/resource'), attempt())
+
+  expect(
+    await Tap.Server.verifier({
+      keyResolver: () => keys.publicKey,
+      nonceStore: Identity.Store.memory(),
+    }).verify(signed),
+  ).toMatchObject({
+    status: 'valid',
+    value: { intent: Tap.Constants.intents.payment, keyId: 'remote-tap-agent' },
+  })
+})
+
 test('verifies externally ordered signature parameters and extensions', async () => {
   const keys = await keyPair()
   const request = new Request('https://merchant.example/resource')

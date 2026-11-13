@@ -26,21 +26,27 @@ export type VerifyResult =
 /**
  * Signs attestation claims as a compact JWS (EdDSA over Ed25519).
  *
- * For issuers. `keyId` should be the RFC 7638 thumbprint of the public key
- * published in the issuer's JSON Web Key Set.
+ * For issuers. `key` is a local Ed25519 private key or an external signer.
+ * `keyId` should be the RFC 7638 thumbprint of the public key published in the
+ * issuer's JSON Web Key Set.
  */
 export async function sign(
   claims: Types.Claims,
-  options: { readonly key: CryptoKey; readonly keyId: string },
+  options: { readonly key: Types.SigningKey; readonly keyId: string },
 ): Promise<string> {
+  const { key } = options
+  if ('sign' in key && key.algorithm !== 'ed25519')
+    throw new TypeError('Attestations require an Ed25519 signing key.')
   const header = { alg: Constants.algorithm, kid: options.keyId, typ: Constants.tokenType }
   const input = `${encode(header)}.${encode(claims)}`
-  const signature = await crypto.subtle.sign(
-    { name: 'Ed25519' },
-    options.key,
-    new TextEncoder().encode(input),
-  )
-  return `${input}.${Base64.fromBytes(new Uint8Array(signature), { pad: false, url: true })}`
+  const bytes = new TextEncoder().encode(input)
+  // Copy an external signer's result over its exact byte range, so a view into a larger buffer works.
+  const signature =
+    'sign' in key
+      ? Uint8Array.from(await key.sign(bytes))
+      : new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, key, bytes))
+  if (signature.length !== 64) throw new Error('The Ed25519 signature must be 64 bytes.')
+  return `${input}.${Base64.fromBytes(signature, { pad: false, url: true })}`
 }
 
 /** Decodes an attestation without verifying it, or returns `undefined` if it is malformed. */

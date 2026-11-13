@@ -25,6 +25,19 @@ export type Claims = {
 }
 
 /**
+ * An issuer's Ed25519 private key, or an external signer such as a KMS, HSM or
+ * hosted key service that keeps the private key out of process.
+ */
+export type SigningKey =
+  | CryptoKey
+  | {
+      /** Signature algorithm of the external signer. Attestations use Ed25519 only. */
+      readonly algorithm: 'ed25519'
+      /** Signs the JWS signing input bytes and returns the raw 64-byte Ed25519 signature. */
+      readonly sign: (bytes: Uint8Array) => Promise<Uint8Array>
+    }
+
+/**
  * Resolves the issuer's public key for an attestation's `kid`. Returns
  * `undefined` for an unknown or malformed `kid`, and throws only when the keys
  * cannot be fetched: a throw answers the request with 503 (`unavailable`).

@@ -40,6 +40,64 @@ test('signs and verifies an attestation', async () => {
   expect(await Attestation.verify(token, options)).toEqual({ claims, status: 'valid' })
 })
 
+test('signs with an external Ed25519 signer and preserves a sliced signature', async () => {
+  const { claims, keyId, keys, options } = await setup()
+  const inputs: string[] = []
+  const token = await Attestation.sign(claims, {
+    key: {
+      algorithm: 'ed25519',
+      async sign(bytes) {
+        inputs.push(new TextDecoder().decode(bytes))
+        const signature = new Uint8Array(
+          await crypto.subtle.sign('Ed25519', keys.privateKey, Uint8Array.from(bytes).buffer),
+        )
+        const padded = new Uint8Array(signature.length + 16).fill(0xff)
+        padded.set(signature, 8)
+        return padded.subarray(8, 8 + signature.length)
+      },
+    },
+    keyId,
+  })
+  expect(inputs).toEqual([token.slice(0, token.lastIndexOf('.'))])
+  expect(token).toBe(await Attestation.sign(claims, { key: keys.privateKey, keyId }))
+  expect(await Attestation.verify(token, options)).toEqual({ claims, status: 'valid' })
+})
+
+test('rejects external signers with a wrong algorithm, a bad signature length or a failure', async () => {
+  const { claims, keyId } = await setup()
+  let calls = 0
+  await expect(
+    Attestation.sign(claims, {
+      key: {
+        algorithm: 'rsa-pss-sha512' as 'ed25519',
+        async sign() {
+          calls++
+          return new Uint8Array(64)
+        },
+      },
+      keyId,
+    }),
+  ).rejects.toThrow('Ed25519 signing key')
+  expect(calls).toBe(0)
+  await expect(
+    Attestation.sign(claims, {
+      key: { algorithm: 'ed25519', sign: async () => new Uint8Array(63) },
+      keyId,
+    }),
+  ).rejects.toThrow('64 bytes')
+  await expect(
+    Attestation.sign(claims, {
+      key: {
+        algorithm: 'ed25519',
+        async sign() {
+          throw new Error('Remote signer unavailable.')
+        },
+      },
+      keyId,
+    }),
+  ).rejects.toThrow('Remote signer unavailable.')
+})
+
 test('rejects wrong claims, times, keys and tampering', async () => {
   const { claims, keyId, keys, options } = await setup()
   const sign = (overrides: Partial<Attestation.Claims>) =>
